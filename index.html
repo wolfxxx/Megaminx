@@ -49,10 +49,6 @@
         overflow: auto;
         padding: 10px;
       }
-      canvas {
-        top: 166px;
-        height: calc(100% - 166px);
-      }
       #ui h1 { font-size: 13px; }
       #ui .hint { font-size: 11px; }
       button {
@@ -854,6 +850,17 @@
     function updateStatus() {
       if (statusEl) statusEl.textContent = isSolved() ? "Solved!" : "";
     }
+    function applyResponsiveLayout() {
+      const mobile = window.matchMedia("(max-width: 768px)").matches;
+      const panelH = mobile ? (document.getElementById("ui")?.offsetHeight || 0) + 12 : 0;
+      const renderW = window.innerWidth;
+      const renderH = Math.max(120, window.innerHeight - panelH);
+      renderer.domElement.style.top = `${panelH}px`;
+      renderer.domElement.style.height = `${renderH}px`;
+      renderer.setSize(renderW, renderH);
+      camera.aspect = renderW / renderH;
+      camera.updateProjectionMatrix();
+    }
 
     function pieceOnFace(mesh, face) {
       const ud = mesh.userData;
@@ -990,11 +997,7 @@
     });
 
     // Resize
-    window.addEventListener("resize", ()=>{
-      camera.aspect = window.innerWidth/window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    });
+    window.addEventListener("resize", applyResponsiveLayout);
 
     // ---------- Render loop ----------
     let frameCount = 0;
@@ -1032,6 +1035,7 @@
     
     // Test render immediately
     console.log('Starting render loop...');
+    applyResponsiveLayout();
     renderer.render(scene, camera);
     requestAnimationFrame(tick);
 
