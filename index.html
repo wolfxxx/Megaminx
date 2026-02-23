@@ -38,6 +38,24 @@
       top: 0;
       left: 0;
     }
+    @media (max-width: 768px) {
+      #ui {
+        left: 8px;
+        right: 8px;
+        top: auto;
+        bottom: 8px;
+        width: auto;
+        max-height: 40vh;
+        overflow: auto;
+        padding: 10px;
+      }
+      #ui h1 { font-size: 13px; }
+      #ui .hint { font-size: 11px; }
+      button {
+        padding: 7px 9px;
+        font-size: 12px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -700,7 +718,15 @@
     const cornerSlotMeshes = []; // 60: one per (face, slot)
     const stickerMeshes = [];
     for (let f = 0; f < 12; f++) {
-      const mat = new THREE.MeshStandardMaterial({ color: COLORS[f], roughness: 0.35, metalness: 0.05 });
+      const mat = new THREE.MeshStandardMaterial({
+        color: COLORS[f],
+        roughness: 0.35,
+        metalness: 0.05,
+        side: THREE.DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2
+      });
       const mesh = new THREE.Mesh(centerGeom, mat);
       mesh.userData = { pieceType: 'center', face: f };
       mesh.position.copy(slotWorldPosition(f, 0, 'center'));
@@ -711,7 +737,15 @@
     }
     for (let face = 0; face < 12; face++) {
       for (let slot = 0; slot < 5; slot++) {
-        const mat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.35, metalness: 0.05, side: THREE.DoubleSide });
+        const mat = new THREE.MeshStandardMaterial({
+          color: 0x888888,
+          roughness: 0.35,
+          metalness: 0.05,
+          side: THREE.DoubleSide,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+          polygonOffsetUnits: -2
+        });
         const mesh = new THREE.Mesh(edgeGeom, mat);
         mesh.userData = { pieceType: 'edgeSlot', face, slot };
         mesh.position.copy(slotWorldPosition(face, slot, 'edge'));
@@ -722,7 +756,15 @@
     }
     for (let face = 0; face < 12; face++) {
       for (let slot = 0; slot < 5; slot++) {
-        const mat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.35, metalness: 0.05, side: THREE.DoubleSide });
+        const mat = new THREE.MeshStandardMaterial({
+          color: 0x888888,
+          roughness: 0.35,
+          metalness: 0.05,
+          side: THREE.DoubleSide,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+          polygonOffsetUnits: -2
+        });
         const mesh = new THREE.Mesh(cornerGeom, mat);
         mesh.userData = { pieceType: 'cornerSlot', face, slot };
         mesh.position.copy(slotWorldPosition(face, slot, 'corner'));
