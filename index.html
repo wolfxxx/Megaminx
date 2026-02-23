@@ -1,0 +1,1001 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Megaminx — Piece-based</title>
+  <style>
+    html, body { margin:0; height:100%; overflow:hidden; background:#0b0d10; color:#e9eef5; font-family: system-ui, Segoe UI, Roboto, Arial; }
+    #ui{
+      position:fixed; left:12px; top:12px; z-index:10;
+      background:rgba(20,24,30,.75); border:1px solid rgba(255,255,255,.08);
+      border-radius:12px; padding:12px; backdrop-filter: blur(8px);
+      width: 320px;
+    }
+    #ui h1{ font-size:14px; margin:0 0 8px; opacity:.9; }
+    #ui .row{ display:flex; gap:8px; margin:8px 0; flex-wrap:wrap; }
+    button{
+      border:1px solid rgba(255,255,255,.14);
+      background:rgba(255,255,255,.06);
+      color:#e9eef5;
+      padding:8px 10px;
+      border-radius:10px;
+      cursor:pointer;
+    }
+    button:hover{ background:rgba(255,255,255,.10); }
+    .hint{ font-size:12px; opacity:.75; line-height:1.35; }
+    .pill{
+      display:inline-block; padding:2px 8px; border-radius:999px;
+      background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.10);
+      font-size:12px; margin-left:6px;
+    }
+    #sel{ font-weight:600; }
+    canvas { 
+      display:block; 
+      width: 100%;
+      height: 100%;
+      position: fixed;
+      top: 0;
+      left: 0;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <h1>Megaminx (12-face) <span class="pill">Piece-based</span></h1>
+    <div class="hint">
+      Click a pentagon to select a face. Rotate it by 72°.<br/>
+      <b>Keys:</b> <code>Q</code> = CCW, <code>E</code> = CW, <code>S</code> = scramble.
+    </div>
+    <div class="row">
+      <button id="cw">Rotate CW (E)</button>
+      <button id="ccw">Rotate CCW (Q)</button>
+      <button id="scramble">Scramble (S)</button>
+      <button id="reset">Reset</button>
+    </div>
+    <div class="hint">
+      Selected face: <span id="sel">none</span>
+      <span id="selColor" style="font-weight:700; margin-left:6px;"></span>
+    </div>
+    <div class="hint" id="status" style="margin-top:6px;"></div>
+    <div class="hint" id="selfcheck" style="margin-top:4px; opacity:.85;"></div>
+    <div class="hint" style="margin-top:6px; opacity:.6">
+      Note: This MVP rotates the selected face’s sticker and Each face: 1 center (pentagon), 5 corner diamonds, 5 between-corner triangles. Centers fixed; edges and corners permute.
+      It’s a clean base to upgrade into a true piece-based Megaminx.
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+      }
+    }
+  </script>
+  <script type="module">
+    // Import THREE and OrbitControls as ES modules
+    import * as THREE from "three";
+    import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
+    
+    // Make THREE available globally for compatibility
+    window.THREE = THREE;
+    
+    // THREE is available globally from the script tag above
+    // Now run the main script
+    try {
+    console.log('Initializing Megaminx simulator...');
+    // ---------- Basics ----------
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x0b0d10, 8, 30);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 200);
+    camera.position.set(0, 4.5, 10);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias:true });
+    if (!renderer.domElement) {
+      throw new Error('Failed to create WebGL renderer');
+    }
+    const gl = renderer.getContext();
+    if (!gl) {
+      throw new Error('WebGL context not available');
+    }
+    console.log('WebGL context:', gl.getParameter(gl.VERSION));
+    
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.setClearColor(0x0b0d10, 1);
+    const canvas = renderer.domElement;
+    canvas.style.display = 'block';
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    document.body.appendChild(canvas);
+    console.log('Renderer created, canvas size:', window.innerWidth, 'x', window.innerHeight);
+    console.log('Canvas element:', canvas);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // Lights
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+    dir.position.set(6, 8, 4);
+    scene.add(dir);
+
+    // ---------- Core (dodecahedron body) ----------
+    const coreGeom = new THREE.DodecahedronGeometry(2.0, 0);
+    const coreMat  = new THREE.MeshStandardMaterial({
+      color: 0x111318, roughness: 0.55, metalness: 0.05
+    });
+    const core = new THREE.Mesh(coreGeom, coreMat);
+    scene.add(core);
+
+    // ---------- Helper: build a regular pentagon shape in XY plane ----------
+    function makePentagonShape(radius=1){
+      const shape = new THREE.Shape();
+      for (let i=0; i<5; i++){
+        const a = (Math.PI*2*i)/5 - Math.PI/2;
+        const x = Math.cos(a)*radius;
+        const y = Math.sin(a)*radius;
+        if (i===0) shape.moveTo(x,y); else shape.lineTo(x,y);
+      }
+      shape.closePath();
+      return shape;
+    }
+
+    // ---------- Extract 12 face normals from the triangulated dodecahedron ----------
+    // DodecahedronGeometry is triangulated; we cluster triangles by similar normals into 12 groups.
+    coreGeom.computeVertexNormals();
+    const pos = coreGeom.attributes.position;
+    if (!pos) {
+      throw new Error('Geometry position attribute not found');
+    }
+    const indexAttr = coreGeom.index;
+    const triCount = indexAttr ? indexAttr.count / 3 : pos.count / 3;
+    const getTriVertices = (triIdx) => {
+      const i = triIdx * 3;
+      if (indexAttr) return [ indexAttr.getX(i), indexAttr.getX(i+1), indexAttr.getX(i+2) ];
+      return [ i, i + 1, i + 2 ];
+    };
+    function triVertices(i) {
+      const [va, vb, vc] = getTriVertices(i);
+      return [
+        new THREE.Vector3().fromBufferAttribute(pos, va),
+        new THREE.Vector3().fromBufferAttribute(pos, vb),
+        new THREE.Vector3().fromBufferAttribute(pos, vc)
+      ];
+    }
+    function triNormal(i){
+      const [a, b, c] = triVertices(i);
+      return new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a)).normalize();
+    }
+    function triCentroid(i){
+      const [a, b, c] = triVertices(i);
+      return a.clone().add(b).add(c).multiplyScalar(1/3);
+    }
+
+    const faceGroups = []; // { normal, tris:[...], center }
+    const ANGLE_EPS = 0.12; // radians; clustering tolerance
+
+    for (let i=0; i<triCount; i++){
+      const n = triNormal(i);
+
+      // Find an existing group with similar normal direction.
+      let best = -1;
+      for (let g=0; g<faceGroups.length; g++){
+        const dot = n.dot(faceGroups[g].normal);
+        const ang = Math.acos(Math.min(1, Math.max(-1, dot)));
+        if (ang < ANGLE_EPS){ best = g; break; }
+      }
+      if (best === -1){
+        faceGroups.push({ normal: n.clone(), tris:[i], center: triCentroid(i) });
+      } else {
+        faceGroups[best].tris.push(i);
+        faceGroups[best].center.add(triCentroid(i));
+      }
+    }
+
+    // Average centers
+    faceGroups.forEach(g => g.center.multiplyScalar(1 / g.tris.length));
+    // Ensure normals point outward (same direction as face center from origin)
+    faceGroups.forEach(g => {
+      if (g.center.dot(g.normal) < 0) g.normal.negate();
+    });
+
+    // Expect 12 groups
+    faceGroups.sort((a,b)=> b.center.y - a.center.y); // stable ordering (top-ish first)
+    
+    console.log('Face groups created:', faceGroups.length);
+    if (faceGroups.length !== 12) {
+      console.warn('Expected 12 face groups, got', faceGroups.length);
+    }
+
+    // ---------- 1. Dodecahedron topology (position-based: works for indexed and non-indexed geometry) ----------
+    const posAttr = coreGeom.attributes.position;
+    const toKey = (p) => p.x.toFixed(5) + ',' + p.y.toFixed(5) + ',' + p.z.toFixed(5);
+    const posFromVert = (v) => new THREE.Vector3().fromBufferAttribute(posAttr, v);
+    // Per face: collect positions from triangles, dedupe by key, take 5 farthest from center
+    const faceVertexPositions = []; // face -> [Vector3 x 5] cyclic
+    for (let f = 0; f < 12; f++) {
+      const g = faceGroups[f];
+      const center = g.center.clone();
+      const byKey = new Map(); // positionKey -> Vector3
+      for (const triIdx of g.tris) {
+        for (const v of getTriVertices(triIdx)) {
+          const p = posFromVert(v);
+          const k = toKey(p);
+          if (!byKey.has(k)) byKey.set(k, p.clone());
+        }
+      }
+      const positions = Array.from(byKey.values());
+      positions.sort((a, b) => b.distanceToSquared(center) - a.distanceToSquared(center));
+      const five = positions.slice(0, 5);
+      if (five.length !== 5) console.warn('Face', f, 'has', five.length, 'corner positions');
+      const normal = g.normal.clone();
+      const right = new THREE.Vector3().crossVectors(normal, new THREE.Vector3(0,1,0)).normalize();
+      if (right.lengthSq() < 0.01) right.crossVectors(normal, new THREE.Vector3(1,0,0)).normalize();
+      const up = new THREE.Vector3().crossVectors(right, normal).normalize();
+      five.sort((a, b) => {
+        const pa = a.clone().sub(center);
+        const pb = b.clone().sub(center);
+        return Math.atan2(up.dot(pa), right.dot(pa)) - Math.atan2(up.dot(pb), right.dot(pb));
+      });
+      faceVertexPositions.push(five);
+    }
+    // Face plane from pentagon: center and outward normal for flat tiling
+    const facePlaneCenter = [];
+    const facePlaneNormal = [];
+    for (let f = 0; f < 12; f++) {
+      const p = faceVertexPositions[f];
+      const center = new THREE.Vector3(0, 0, 0);
+      p.forEach(pt => center.add(pt));
+      center.multiplyScalar(1 / 5);
+      const e0 = new THREE.Vector3().subVectors(p[1], p[0]);
+      const e1 = new THREE.Vector3().subVectors(p[2], p[0]);
+      const normal = new THREE.Vector3().crossVectors(e0, e1).normalize();
+      if (center.dot(normal) < 0) normal.negate();
+      facePlaneCenter.push(center);
+      facePlaneNormal.push(normal);
+    }
+    const edgeKeyFromPos = (p1, p2) => {
+      const k1 = toKey(p1), k2 = toKey(p2);
+      return k1 < k2 ? k1 + '|' + k2 : k2 + '|' + k1;
+    };
+    const edgeToFaces = new Map();
+    for (let f = 0; f < 12; f++) {
+      const pos = faceVertexPositions[f];
+      for (let i = 0; i < 5; i++) {
+        const k = edgeKeyFromPos(pos[i], pos[(i+1)%5]);
+        if (!edgeToFaces.has(k)) edgeToFaces.set(k, []);
+        if (!edgeToFaces.get(k).includes(f)) edgeToFaces.get(k).push(f);
+      }
+    }
+    const faceAdjacency = [];
+    for (let f = 0; f < 12; f++) {
+      const pos = faceVertexPositions[f];
+      const adj = [];
+      for (let i = 0; i < 5; i++) {
+        const k = edgeKeyFromPos(pos[i], pos[(i+1)%5]);
+        const faces = edgeToFaces.get(k) || [];
+        const other = faces.find(x => x !== f);
+        adj.push(other);
+      }
+      faceAdjacency.push(adj);
+    }
+    const edgeList = [];
+    const edgeIdByKey = new Map();
+    for (let f = 0; f < 12; f++) {
+      for (let slot = 0; slot < 5; slot++) {
+        const f2 = faceAdjacency[f][slot];
+        if (typeof f2 === 'number' && f < f2) {
+          const eid = edgeList.length;
+          const slotB = faceAdjacency[f2].indexOf(f);
+          edgeList.push({ faceA: f, slotA: slot, faceB: f2, slotB });
+          edgeIdByKey.set(f + ',' + f2, eid);
+          edgeIdByKey.set(f2 + ',' + f, eid);
+        }
+      }
+    }
+    if (edgeList.length !== 30) console.warn('edgeList has', edgeList.length, 'edges, expected 30');
+    const faceEdgeSlots = [];
+    for (let f = 0; f < 12; f++) {
+      const arr = [];
+      for (let slot = 0; slot < 5; slot++) {
+        const f2 = faceAdjacency[f][slot];
+        arr.push(edgeIdByKey.get(f + ',' + f2));
+      }
+      faceEdgeSlots.push(arr);
+    }
+    const positionToFaces = new Map(); // positionKey -> [f1, f2, f3]
+    for (let f = 0; f < 12; f++) {
+      for (let slot = 0; slot < 5; slot++) {
+        const k = toKey(faceVertexPositions[f][slot]);
+        if (!positionToFaces.has(k)) positionToFaces.set(k, []);
+        if (!positionToFaces.get(k).includes(f)) positionToFaces.get(k).push(f);
+      }
+    }
+    const cornerList = [];
+    const cornerIdByPosKey = new Map();
+    for (const [posKey, faces] of positionToFaces) {
+      if (faces.length !== 3) continue;
+      const cid = cornerList.length;
+      const slotPerFace = {};
+      for (const f of faces) {
+        const pos = faceVertexPositions[f];
+        const idx = pos.findIndex(p => toKey(p) === posKey);
+        slotPerFace[f] = idx;
+      }
+      // Order the three faces cyclically around the corner so (faceIdx + orient) % 3 gives correct sticker
+      const A = faces[0];
+      const sA = slotPerFace[A];
+      const next = faceAdjacency[A][sA];
+      const prev = faceAdjacency[A][(sA - 1 + 5) % 5];
+      const orderedFaces = [A, next, prev];
+      cornerList.push({ faces: orderedFaces, slotPerFace });
+      cornerIdByPosKey.set(posKey, cid);
+    }
+    const faceCornerSlots = [];
+    for (let f = 0; f < 12; f++) {
+      const arr = [];
+      for (let slot = 0; slot < 5; slot++) {
+        const k = toKey(faceVertexPositions[f][slot]);
+        arr.push(cornerIdByPosKey.get(k));
+      }
+      faceCornerSlots.push(arr);
+    }
+
+    // ---------- 2. State: permutation and orientation ----------
+    const NUM_EDGES = 30;
+    const NUM_CORNERS = 20;
+    let edgePermutation = Array.from({ length: NUM_EDGES }, (_, i) => i);
+    let edgeOrientation = new Array(NUM_EDGES).fill(0);
+    let cornerPermutation = Array.from({ length: NUM_CORNERS }, (_, i) => i);
+    let cornerOrientation = new Array(NUM_CORNERS).fill(0);
+
+    function applyTurn(face, dir) {
+      // Direction mapping for state is opposite the visual rotation sign.
+      // Keep this inversion here so UI CW/CCW can use direct `dir` for animation.
+      const d = dir === 1 ? -1 : 1;
+      const edgeSlots = faceEdgeSlots[face];
+      const cornerSlots = faceCornerSlots[face];
+      const newEP = edgePermutation.slice();
+      const newEO = edgeOrientation.slice();
+      const newCP = cornerPermutation.slice();
+      const newCO = cornerOrientation.slice();
+      for (let i = 0; i < 5; i++) {
+        const j = (i + d + 5) % 5;
+        const dstEdge = edgeSlots[i];
+        const srcEdge = edgeSlots[j];
+        const edgePiece = edgePermutation[srcEdge];
+        newEP[dstEdge] = edgePiece;
+
+        // Edge orientation tracks whether piece.faceA sits on slot.faceA (0) or slot.faceB (1).
+        const srcDef = edgeList[srcEdge];
+        const dstDef = edgeList[dstEdge];
+        const srcA = srcDef.faceA, srcB = srcDef.faceB;
+        const dstA = dstDef.faceA, dstB = dstDef.faceB;
+        const srcOther = (srcA === face) ? srcB : srcA;
+        const dstOther = (dstA === face) ? dstB : dstA;
+        const oldOrient = edgeOrientation[edgePiece];
+        const pieceFaceAOnSource = (oldOrient === 0) ? srcA : srcB;
+        const pieceFaceAOnDest = (pieceFaceAOnSource === face) ? face : dstOther;
+        newEO[edgePiece] = (pieceFaceAOnDest === dstA) ? 0 : 1;
+
+        const dstCorner = cornerSlots[i];
+        const srcCorner = cornerSlots[j];
+        const cornerPiece = cornerPermutation[srcCorner];
+        newCP[dstCorner] = cornerPiece;
+
+        // Update corner twist in slot-index space:
+        // src faces map to dst faces by the face turn; convert that mapping to an orientation delta.
+        const srcFaces = cornerList[srcCorner].faces;
+        const dstFaces = cornerList[dstCorner].faces;
+        const srcNext = faceAdjacency[face][j];
+        const srcPrev = faceAdjacency[face][(j + 4) % 5];
+        const dstNext = faceAdjacency[face][i];
+        const dstPrev = faceAdjacency[face][(i + 4) % 5];
+        const mapSrcToDst = new Map([
+          [face, face],
+          [srcNext, dstNext],
+          [srcPrev, dstPrev]
+        ]);
+        let delta = 0;
+        let deltaSet = false;
+        for (let t = 0; t < 3; t++) {
+          const dstFace = dstFaces[t];
+          let s = -1;
+          for (let k = 0; k < 3; k++) {
+            if (mapSrcToDst.get(srcFaces[k]) === dstFace) { s = k; break; }
+          }
+          if (s === -1) continue;
+          const cand = (s - t + 3) % 3;
+          if (!deltaSet) {
+            delta = cand;
+            deltaSet = true;
+          }
+        }
+        newCO[cornerPiece] = (cornerOrientation[cornerPiece] + delta) % 3;
+      }
+      edgePermutation = newEP;
+      edgeOrientation = newEO;
+      cornerPermutation = newCP;
+      cornerOrientation = newCO;
+    }
+
+    function isSolved() {
+      for (let i = 0; i < NUM_EDGES; i++) if (edgePermutation[i] !== i || edgeOrientation[i] !== 0) return false;
+      for (let i = 0; i < NUM_CORNERS; i++) if (cornerPermutation[i] !== i || cornerOrientation[i] !== 0) return false;
+      return true;
+    }
+
+    function resetState() {
+      edgePermutation = Array.from({ length: NUM_EDGES }, (_, i) => i);
+      edgeOrientation = new Array(NUM_EDGES).fill(0);
+      cornerPermutation = Array.from({ length: NUM_CORNERS }, (_, i) => i);
+      cornerOrientation = new Array(NUM_CORNERS).fill(0);
+    }
+    function snapshotState() {
+      return {
+        edgePermutation: edgePermutation.slice(),
+        edgeOrientation: edgeOrientation.slice(),
+        cornerPermutation: cornerPermutation.slice(),
+        cornerOrientation: cornerOrientation.slice()
+      };
+    }
+    function restoreState(state) {
+      edgePermutation = state.edgePermutation.slice();
+      edgeOrientation = state.edgeOrientation.slice();
+      cornerPermutation = state.cornerPermutation.slice();
+      cornerOrientation = state.cornerOrientation.slice();
+    }
+    function runMoveSelfCheck() {
+      const saved = snapshotState();
+      const prevSelectedFace = selectedFace;
+      const failures = [];
+
+      resetState();
+      for (let f = 0; f < 12; f++) {
+        applyTurn(f, +1);
+        applyTurn(f, -1);
+        if (!isSolved()) failures.push(`face ${f + 1}: CW then CCW`);
+        resetState();
+      }
+      for (let f = 0; f < 12; f++) {
+        for (let k = 0; k < 5; k++) applyTurn(f, +1);
+        if (!isSolved()) failures.push(`face ${f + 1}: 5x CW`);
+        resetState();
+      }
+
+      restoreState(saved);
+      updateStickerSlots();
+      setSelectedFace(prevSelectedFace);
+      updateStatus();
+
+      if (failures.length) {
+        console.warn("Move self-check failed:", failures);
+        if (selfCheckEl) selfCheckEl.textContent = `Self-check: FAIL (${failures.length})`;
+      } else {
+        console.log("Move self-check passed");
+        if (selfCheckEl) selfCheckEl.textContent = "Self-check: PASS";
+      }
+    }
+
+    // ---------- Create 12 sticker pentagons ----------
+    const COLORS = [
+      0xffffff, // white
+      0xffd400, // yellow
+      0x00a2ff, // blue
+      0x00c853, // green
+      0xff3d00, // orange-red
+      0x9c27b0, // purple
+      0xff6d00, // orange
+      0x00e5ff, // cyan
+      0xff1744, // red
+      0x76ff03, // lime
+      0x2979ff, // deep blue
+      0xb2ff59  // light green
+    ];
+    const COLOR_NAMES = [
+      "WHITE",
+      "YELLOW",
+      "BLUE",
+      "GREEN",
+      "ORANGE-RED",
+      "PURPLE",
+      "ORANGE",
+      "CYAN",
+      "RED",
+      "LIME",
+      "DEEP BLUE",
+      "LIGHT GREEN"
+    ];
+
+    // A simple "center color state" per face (we’ll cycle this on turns for the MVP)
+    const piecesGroup = new THREE.Group();
+    scene.add(piecesGroup);
+
+    const outward = 0.04;
+    const centerScale = 0.30;
+    const faceQuats = [];
+    const tempMatrix = new THREE.Matrix4();
+    for (let f = 0; f < 12; f++) {
+      const normal = facePlaneNormal[f].clone();
+      // Basis so sticker local -Y points to face vertex 0; use right-handed: up = -dirToV0, right = up × normal
+      const dirToV0 = new THREE.Vector3().subVectors(faceVertexPositions[f][0], facePlaneCenter[f]).normalize();
+      const up = dirToV0.clone().negate();
+      const right = new THREE.Vector3().crossVectors(up, normal).normalize();
+      tempMatrix.makeBasis(right, up, normal);
+      const q = new THREE.Quaternion().setFromRotationMatrix(tempMatrix);
+      faceQuats.push(q);
+    }
+    function slotWorldPosition(face, slot, type) {
+      const center = facePlaneCenter[face];
+      const normal = facePlaneNormal[face].clone().multiplyScalar(outward);
+      const p = faceVertexPositions[face];
+      const inner = (idx) => center.clone().lerp(p[idx], centerScale);
+      let onPlane;
+      if (type === 'center') {
+        onPlane = center.clone();
+      } else if (type === 'edge') {
+        const i0 = inner(slot);
+        const i1 = inner((slot + 1) % 5);
+        const m = p[slot].clone().add(p[(slot + 1) % 5]).multiplyScalar(0.5);
+        onPlane = i0.add(i1).add(m).multiplyScalar(1 / 3);
+      } else {
+        const prevMid = p[(slot + 4) % 5].clone().add(p[slot]).multiplyScalar(0.5);
+        const nextMid = p[slot].clone().add(p[(slot + 1) % 5]).multiplyScalar(0.5);
+        const i0 = inner(slot);
+        onPlane = p[slot].clone().add(nextMid).add(i0).add(prevMid).multiplyScalar(1 / 4);
+      }
+      return onPlane.add(normal);
+    }
+    const tempCornerToVertex = new THREE.Vector3();
+    const tempEdgeToOuter = new THREE.Vector3();
+    const tempQuatInv = new THREE.Quaternion();
+    function slotWorldQuaternion(face, slot, type, orient) {
+      const q = faceQuats[face].clone();
+      let angle;
+      if (type === 'corner') {
+        tempCornerToVertex.copy(faceVertexPositions[face][slot]).sub(slotWorldPosition(face, slot, 'corner'));
+        tempQuatInv.copy(faceQuats[face]).invert();
+        tempCornerToVertex.applyQuaternion(tempQuatInv);
+        angle = Math.atan2(tempCornerToVertex.y, tempCornerToVertex.x) - Math.atan2(cornerOuterFromCentroid.y, cornerOuterFromCentroid.x);
+      } else if (type === 'edge') {
+        tempEdgeToOuter.copy(faceVertexPositions[face][slot]).add(faceVertexPositions[face][(slot + 1) % 5]).multiplyScalar(0.5).sub(slotWorldPosition(face, slot, 'edge'));
+        tempQuatInv.copy(faceQuats[face]).invert();
+        tempEdgeToOuter.applyQuaternion(tempQuatInv);
+        angle = Math.atan2(tempEdgeToOuter.y, tempEdgeToOuter.x) - Math.atan2(edgePointFromCentroid.y, edgePointFromCentroid.x);
+      } else {
+        angle = (Math.PI * 2 * slot) / 5;
+      }
+      const twist = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), angle);
+      q.multiply(twist);
+      if (type === 'edge' && orient === 1) q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI));
+      if (type === 'corner' && orient) q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), (orient * Math.PI * 2) / 3));
+      return q;
+    }
+    const faceRadius = (f) => {
+      const c = facePlaneCenter[f];
+      const verts = faceVertexPositions[f];
+      return verts.reduce((acc, p) => acc + p.distanceTo(c), 0) / 5;
+    };
+    // Same (right,up) basis as when face vertices were sorted -> slot order matches vertex order.
+    // Permutation: slot i gets piece from slot (i+1) for CW. We need animation to move slot (i+1) -> slot i,
+    // i.e. rotate by -2π/5 for CW. So we need +2π/5 to move slot 0 -> slot 1 (then -2π/5 moves 1->0).
+    // faceAnimSign: +1 = use -2π/5 for CW (slot 1 goes to 0); -1 = use +2π/5 for CW (slot 4 goes to 0).
+    const faceAnimSign = [];
+    const tempVec = new THREE.Vector3();
+    const wrapAngle = (a) => {
+      while (a > Math.PI) a -= Math.PI * 2;
+      while (a < -Math.PI) a += Math.PI * 2;
+      return a;
+    };
+    for (let f = 0; f < 12; f++) {
+      const center = facePlaneCenter[f];
+      const normal = facePlaneNormal[f].clone();
+      let right = new THREE.Vector3().crossVectors(normal, new THREE.Vector3(0, 1, 0)).normalize();
+      if (right.lengthSq() < 0.01) right.crossVectors(normal, new THREE.Vector3(1, 0, 0)).normalize();
+      const up = new THREE.Vector3().crossVectors(right, normal).normalize();
+      const angles = [];
+      for (let s = 0; s < 5; s++) {
+        tempVec.copy(slotWorldPosition(f, s, 'edge')).sub(center);
+        tempVec.sub(normal.clone().multiplyScalar(normal.dot(tempVec)));
+        angles.push(Math.atan2(up.dot(tempVec), right.dot(tempVec)));
+      }
+      const turnAngle = (Math.PI * 2) / 5;
+      const nearestSlot = (a) => {
+        let best = 0;
+        let bestAbs = Infinity;
+        for (let j = 0; j < 5; j++) {
+          const d = Math.abs(wrapAngle(a - angles[j]));
+          if (d < bestAbs) { bestAbs = d; best = j; }
+        }
+        return best;
+      };
+      const scoreForSign = (sign) => {
+        // For dir=+1 in applyTurn: piece at slot k should move to (k-1).
+        // Choose the rotation sign that matches that full 5-slot mapping.
+        let score = 0;
+        for (let k = 0; k < 5; k++) {
+          const predicted = nearestSlot(angles[k] + sign * turnAngle);
+          const expected = (k + 4) % 5;
+          const cwDist = (predicted - expected + 5) % 5;
+          const ccwDist = (expected - predicted + 5) % 5;
+          score += Math.min(cwDist, ccwDist);
+        }
+        return score;
+      };
+      const plusScore = scoreForSign(1);
+      const minusScore = scoreForSign(-1);
+      faceAnimSign.push(plusScore <= minusScore ? 1 : -1);
+    }
+    // Build sticker geometry from face 0's actual pentagon (projected to face plane) so tiles match the face exactly
+    const refFace = 0;
+    const normal0 = facePlaneNormal[refFace].clone();
+    const dirToV0_0 = new THREE.Vector3().subVectors(faceVertexPositions[refFace][0], facePlaneCenter[refFace]).normalize();
+    const up0 = dirToV0_0.clone().negate();
+    const right0 = new THREE.Vector3().crossVectors(up0, normal0).normalize();
+    const unitVerts = [];
+    for (let i = 0; i < 5; i++) {
+      const offset = new THREE.Vector3().subVectors(faceVertexPositions[refFace][i], facePlaneCenter[refFace]);
+      unitVerts.push(new THREE.Vector2(right0.dot(offset), up0.dot(offset)));
+    }
+    const edgeMid = (i) => unitVerts[i].clone().add(unitVerts[(i + 1) % 5]).multiplyScalar(0.5);
+    const innerVerts = unitVerts.map(v => v.clone().multiplyScalar(centerScale));
+    const refFaceRadius = faceRadius(refFace);
+    const stickerGap = 0.98;
+    const avgFaceRadius = faceVertexPositions.reduce((sum, verts, f) => sum + faceRadius(f), 0) / 12;
+
+    // Each face has exactly 3 tile types: (1) 1 center pentagon/circle, (2) 5 corner diamonds, (3) 5 between-corner triangles
+    const useCircleCenter = false;
+    let centerGeom;
+    if (useCircleCenter) {
+      const innerPentagonRadius = innerVerts[0].length();
+      const circleRadius = innerPentagonRadius * Math.cos(Math.PI / 5);
+      const centerShape = new THREE.Shape().absarc(0, 0, circleRadius, 0, Math.PI * 2, false);
+      centerGeom = new THREE.ShapeGeometry(centerShape);
+    } else {
+      const centerShape = new THREE.Shape();
+      for (let i = 0; i < 5; i++) {
+        const p = innerVerts[i];
+        if (i === 0) centerShape.moveTo(p.x, p.y); else centerShape.lineTo(p.x, p.y);
+      }
+      centerShape.closePath();
+      centerGeom = new THREE.ShapeGeometry(centerShape);
+    }
+    centerGeom.computeVertexNormals();
+    // Between-corner tile: triangle — base on center pentagon (innerVerts[0]-[1]), point outward (extended so it reaches edge after stickerGap scale)
+    const edgePtsRaw = [innerVerts[0], innerVerts[1], edgeMid(0)];
+    const edgeCentroidRaw = edgePtsRaw.reduce((acc, p) => acc.add(p), new THREE.Vector2(0, 0)).multiplyScalar(1 / 3);
+    const edgePointExtended = edgeCentroidRaw.clone().add(edgeMid(0).clone().sub(edgeCentroidRaw).multiplyScalar(1 / stickerGap));
+    const edgePts = [innerVerts[0], innerVerts[1], edgePointExtended];
+    const edgeCentroid = edgePts.reduce((acc, p) => acc.add(p), new THREE.Vector2(0, 0)).multiplyScalar(1 / 3);
+    const edgePointFromCentroid = edgePointExtended.clone().sub(edgeCentroid);
+    const edgeShape = new THREE.Shape();
+    edgeShape.moveTo(edgePts[0].x - edgeCentroid.x, edgePts[0].y - edgeCentroid.y);
+    edgeShape.lineTo(edgePts[1].x - edgeCentroid.x, edgePts[1].y - edgeCentroid.y);
+    edgeShape.lineTo(edgePts[2].x - edgeCentroid.x, edgePts[2].y - edgeCentroid.y);
+    edgeShape.closePath();
+    const edgeGeom = new THREE.ShapeGeometry(edgeShape);
+    edgeGeom.computeVertexNormals();
+    // Corner tile: diamond — 4 points: [0] outer = pentagon corner, [1][3] side = apex of 2 adjacent triangles, [2] inner = vertex of inner pentagon
+    const cornerPtsRaw = [unitVerts[0], edgeMid(0), innerVerts[0], edgeMid(4)];
+    const cornerCentroidRaw = cornerPtsRaw.reduce((acc, p) => acc.add(p.clone()), new THREE.Vector2(0, 0)).multiplyScalar(1 / 4);
+    const outerExtended = cornerCentroidRaw.clone().add(unitVerts[0].clone().sub(cornerCentroidRaw).multiplyScalar(1 / stickerGap));
+    const cornerPts = [outerExtended, edgeMid(0), innerVerts[0], edgeMid(4)];
+    const cornerCentroid = cornerPts.reduce((acc, p) => acc.add(p.clone()), new THREE.Vector2(0, 0)).multiplyScalar(1 / 4);
+    // Align outer point (index 0) with pentagon corner; side points (1,3) then land on triangle apexes, inner (2) on inner pentagon vertex
+    const cornerOuterFromCentroid = cornerPts[0].clone().sub(cornerCentroid);
+    const cornerShape = new THREE.Shape();
+    cornerShape.moveTo(cornerPts[0].x - cornerCentroid.x, cornerPts[0].y - cornerCentroid.y);
+    cornerShape.lineTo(cornerPts[1].x - cornerCentroid.x, cornerPts[1].y - cornerCentroid.y);
+    cornerShape.lineTo(cornerPts[2].x - cornerCentroid.x, cornerPts[2].y - cornerCentroid.y);
+    cornerShape.lineTo(cornerPts[3].x - cornerCentroid.x, cornerPts[3].y - cornerCentroid.y);
+    cornerShape.closePath();
+    const cornerGeom = new THREE.ShapeGeometry(cornerShape);
+    cornerGeom.computeVertexNormals();
+    const centerMeshes = [];
+    const edgeSlotMeshes = []; // 60: one per (face, slot), index = face*5+slot
+    const cornerSlotMeshes = []; // 60: one per (face, slot)
+    const stickerMeshes = [];
+    for (let f = 0; f < 12; f++) {
+      const mat = new THREE.MeshStandardMaterial({ color: COLORS[f], roughness: 0.35, metalness: 0.05 });
+      const mesh = new THREE.Mesh(centerGeom, mat);
+      mesh.userData = { pieceType: 'center', face: f };
+      mesh.position.copy(slotWorldPosition(f, 0, 'center'));
+      mesh.quaternion.copy(faceQuats[f]);
+      piecesGroup.add(mesh);
+      centerMeshes.push(mesh);
+      stickerMeshes.push(mesh);
+    }
+    for (let face = 0; face < 12; face++) {
+      for (let slot = 0; slot < 5; slot++) {
+        const mat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.35, metalness: 0.05, side: THREE.DoubleSide });
+        const mesh = new THREE.Mesh(edgeGeom, mat);
+        mesh.userData = { pieceType: 'edgeSlot', face, slot };
+        mesh.position.copy(slotWorldPosition(face, slot, 'edge'));
+        piecesGroup.add(mesh);
+        edgeSlotMeshes.push(mesh);
+        stickerMeshes.push(mesh);
+      }
+    }
+    for (let face = 0; face < 12; face++) {
+      for (let slot = 0; slot < 5; slot++) {
+        const mat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.35, metalness: 0.05, side: THREE.DoubleSide });
+        const mesh = new THREE.Mesh(cornerGeom, mat);
+        mesh.userData = { pieceType: 'cornerSlot', face, slot };
+        mesh.position.copy(slotWorldPosition(face, slot, 'corner'));
+        piecesGroup.add(mesh);
+        cornerSlotMeshes.push(mesh);
+        stickerMeshes.push(mesh);
+      }
+    }
+    function getEdgeSlotColor(face, slot) {
+      const e = faceEdgeSlots[face][slot];
+      const piece = edgePermutation[e];
+      const orient = edgeOrientation[piece];
+      const slotSides = edgeList[e];
+      const pieceSides = edgeList[piece];
+      const slotIsA = slotSides.faceA === face;
+      return (orient === 0)
+        ? (slotIsA ? COLORS[pieceSides.faceA] : COLORS[pieceSides.faceB])
+        : (slotIsA ? COLORS[pieceSides.faceB] : COLORS[pieceSides.faceA]);
+    }
+    function getCornerSlotColor(face, slot) {
+      const c = faceCornerSlots[face][slot];
+      const piece = cornerPermutation[c];
+      const slotFaces = cornerList[c].faces;
+      const pieceFaces = cornerList[piece].faces;
+      const orient = cornerOrientation[piece];
+      const faceIdx = slotFaces.indexOf(face);
+      const colorIdx = (faceIdx + orient + 3) % 3;
+      return COLORS[pieceFaces[colorIdx]];
+    }
+    function updateStickerSlots() {
+      for (let f = 0; f < 12; f++) {
+        const s = (faceRadius(f) / refFaceRadius) * stickerGap;
+        centerMeshes[f].position.copy(slotWorldPosition(f, 0, 'center'));
+        centerMeshes[f].quaternion.copy(faceQuats[f]);
+        centerMeshes[f].material.color.setHex(COLORS[f]);
+        centerMeshes[f].scale.setScalar(s);
+      }
+      for (let face = 0; face < 12; face++) {
+        const s = (faceRadius(face) / refFaceRadius) * stickerGap;
+        for (let slot = 0; slot < 5; slot++) {
+          const idx = face * 5 + slot;
+          const mesh = edgeSlotMeshes[idx];
+          mesh.position.copy(slotWorldPosition(face, slot, 'edge'));
+          // Sticker footprint on a face is fixed; orientation affects which color is shown, not tile pose.
+          mesh.quaternion.copy(slotWorldQuaternion(face, slot, 'edge', 0));
+          mesh.material.color.setHex(getEdgeSlotColor(face, slot));
+          mesh.scale.setScalar(s);
+        }
+      }
+      for (let face = 0; face < 12; face++) {
+        const s = (faceRadius(face) / refFaceRadius) * stickerGap;
+        for (let slot = 0; slot < 5; slot++) {
+          const idx = face * 5 + slot;
+          const mesh = cornerSlotMeshes[idx];
+          mesh.position.copy(slotWorldPosition(face, slot, 'corner'));
+          // Sticker footprint on a face is fixed; orientation affects which color is shown, not tile pose.
+          mesh.quaternion.copy(slotWorldQuaternion(face, slot, 'corner', 0));
+          mesh.material.color.setHex(getCornerSlotColor(face, slot));
+          mesh.scale.setScalar(s);
+        }
+      }
+    }
+    const updatePiecePositionsFromState = updateStickerSlots;
+    updatePiecePositionsFromState();
+    const facePivots = [];
+    for (let f = 0; f < 12; f++) {
+      const pivot = new THREE.Group();
+      pivot.position.copy(facePlaneCenter[f]);
+      pivot.quaternion.copy(faceQuats[f]);
+      piecesGroup.add(pivot);
+      facePivots.push(pivot);
+    }
+
+    // ---------- Picking ----------
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    let selectedFace = -1;
+
+    const selEl = document.getElementById("sel");
+    const selColorEl = document.getElementById("selColor");
+    const statusEl = document.getElementById("status");
+    const selfCheckEl = document.getElementById("selfcheck");
+    function updateStatus() {
+      if (statusEl) statusEl.textContent = isSolved() ? "Solved!" : "";
+    }
+
+    function pieceOnFace(mesh, face) {
+      const ud = mesh.userData;
+      if (ud.pieceType === 'center') return ud.face === face;
+      if (ud.pieceType === 'edgeSlot' || ud.pieceType === 'cornerSlot') return ud.face === face;
+      return false;
+    }
+
+    function setSelectedFace(f){
+      selectedFace = f;
+      selEl.textContent = (f === -1) ? "none" : `#${f+1}`;
+      if (selColorEl) {
+        if (f === -1) {
+          selColorEl.textContent = "";
+          selColorEl.style.color = "";
+        } else {
+          selColorEl.textContent = `(${COLOR_NAMES[f]})`;
+          selColorEl.style.color = `#${COLORS[f].toString(16).padStart(6, "0")}`;
+        }
+      }
+      stickerMeshes.forEach(mesh => {
+        const ud = mesh.userData;
+        const face = ud.face !== undefined ? ud.face : (ud.faceIndices && ud.faceIndices[0]);
+        const base = ((face !== undefined ? faceRadius(face) : refFaceRadius) / refFaceRadius) * stickerGap;
+        mesh.scale.setScalar(base);
+      });
+    }
+
+    function onPointerMove(e){
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+    }
+
+    function getFaceFromHit(obj) {
+      const ud = obj.userData;
+      if (ud.pieceType === 'center' || ud.pieceType === 'edgeSlot' || ud.pieceType === 'cornerSlot') return ud.face;
+      return -1;
+    }
+
+    function onClick(){
+      raycaster.setFromCamera(mouse, camera);
+      const hits = raycaster.intersectObjects(stickerMeshes, false);
+      if (hits.length) setSelectedFace(getFaceFromHit(hits[0].object));
+    }
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("click", onClick);
+
+    // ---------- 4. Turn animation (option B: interpolate positions) ----------
+    const TURN_DUR_MS = 240;
+    let anim = null; // { face, dir, t0, durMs, meshes, startPos, startQuat, endPos, endQuat }
+
+    function getPiecesOnFace(face) {
+      const meshes = [centerMeshes[face]];
+      for (let i = 0; i < 5; i++) meshes.push(edgeSlotMeshes[face * 5 + i]);
+      for (let i = 0; i < 5; i++) meshes.push(cornerSlotMeshes[face * 5 + i]);
+      return meshes;
+    }
+
+    function getPiecesInTurn(face) {
+      const meshes = getPiecesOnFace(face);
+      for (let slot = 0; slot < 5; slot++) {
+        const adjFace = faceAdjacency[face][slot];
+        const edgeId = faceEdgeSlots[face][slot];
+        const adjSlot = faceEdgeSlots[adjFace].indexOf(edgeId);
+        meshes.push(edgeSlotMeshes[adjFace * 5 + adjSlot]);
+      }
+      for (let slot = 0; slot < 5; slot++) {
+        const cornerId = faceCornerSlots[face][slot];
+        const { faces: cornerFaces, slotPerFace } = cornerList[cornerId];
+        for (const otherFace of cornerFaces) {
+          if (otherFace === face) continue;
+          const otherSlot = slotPerFace[otherFace];
+          meshes.push(cornerSlotMeshes[otherFace * 5 + otherSlot]);
+        }
+      }
+      return meshes;
+    }
+
+    function rotateSelected(dir){
+      if (selectedFace === -1) return;
+      if (anim) return;
+      const face = selectedFace;
+      const meshes = getPiecesInTurn(face);
+      const center = facePlaneCenter[face].clone();
+      const axis = facePlaneNormal[face].clone();
+      const totalAngle = faceAnimSign[face] * (dir === 1 ? 1 : -1) * (Math.PI * 2 / 5);
+      const startPos = meshes.map(m => m.position.clone());
+      const startQuat = meshes.map(m => m.quaternion.clone());
+      anim = { face, dir, t0: performance.now(), durMs: TURN_DUR_MS, meshes, center, axis, totalAngle, startPos, startQuat };
+    }
+
+    let scrambleTimerId = null;
+    function scramble(n=40){
+      if (scrambleTimerId) clearInterval(scrambleTimerId);
+      let k = 0;
+      scrambleTimerId = setInterval(()=>{
+        if (anim) return;
+        const f = Math.floor(Math.random() * 12);
+        setSelectedFace(f);
+        const dir = Math.random() < 0.5 ? -1 : 1;
+        rotateSelected(dir);
+        k++;
+        if (k >= n) {
+          clearInterval(scrambleTimerId);
+          scrambleTimerId = null;
+        }
+      }, TURN_DUR_MS + 20);
+    }
+
+    function reset(){
+      if (scrambleTimerId) {
+        clearInterval(scrambleTimerId);
+        scrambleTimerId = null;
+      }
+      resetState();
+      updateStickerSlots();
+      setSelectedFace(-1);
+      anim = null;
+      updateStatus();
+    }
+
+    // UI
+    document.getElementById("cw").onclick = ()=> rotateSelected(+1);
+    document.getElementById("ccw").onclick = ()=> rotateSelected(-1);
+    document.getElementById("scramble").onclick = ()=> scramble(40);
+    document.getElementById("reset").onclick = ()=> reset();
+
+    window.addEventListener("keydown", (e)=>{
+      if (e.key.toLowerCase() === "e") rotateSelected(+1);
+      if (e.key.toLowerCase() === "q") rotateSelected(-1);
+      if (e.key.toLowerCase() === "s") scramble(40);
+    });
+
+    // Resize
+    window.addEventListener("resize", ()=>{
+      camera.aspect = window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // ---------- Render loop ----------
+    let frameCount = 0;
+    function tick(timestamp){
+      if (frameCount === 0) {
+        console.log('First render frame');
+        console.log('Scene objects:', scene.children.map(c => c.type || c.constructor.name));
+      }
+      frameCount++;
+      
+      controls.update();
+
+      if (anim){
+        const elapsed = timestamp - anim.t0;
+        const p = Math.min(1, elapsed / anim.durMs);
+        const ease = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+        const angle = anim.totalAngle * ease;
+        const rotQuat = new THREE.Quaternion().setFromAxisAngle(anim.axis, angle);
+        for (let i = 0; i < anim.meshes.length; i++) {
+          anim.meshes[i].position.copy(anim.startPos[i]).sub(anim.center).applyQuaternion(rotQuat).add(anim.center);
+          anim.meshes[i].quaternion.copy(anim.startQuat[i]).premultiply(rotQuat);
+        }
+        if (p >= 1) {
+          applyTurn(anim.face, anim.dir);
+          updatePiecePositionsFromState();
+          if (selectedFace === anim.face) setSelectedFace(selectedFace);
+          updateStatus();
+          anim = null;
+        }
+      }
+
+      renderer.render(scene, camera);
+      requestAnimationFrame(tick);
+    }
+    
+    // Test render immediately
+    console.log('Starting render loop...');
+    renderer.render(scene, camera);
+    requestAnimationFrame(tick);
+
+    setSelectedFace(0);
+    updateStatus();
+    runMoveSelfCheck();
+    } catch (error) {
+      console.error('Error initializing megaminx:', error);
+      document.body.innerHTML = '<div style="padding:20px;color:red;">Error: ' + error.message + '</div>';
+    }
+  </script>
+</body>
+</html>
